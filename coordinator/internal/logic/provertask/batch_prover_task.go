@@ -67,7 +67,7 @@ func (bp *BatchProverTask) Assign(ctx *gin.Context, getTaskParameter *coordinato
 	if strings.HasPrefix(taskCtx.ProverName, ExternalProverNamePrefix) {
 		unassignedBatchCount, getCountError := bp.batchOrm.GetUnassignedBatchCount(ctx.Copy(), maxActiveAttempts, maxTotalAttempts)
 		if getCountError != nil {
-			log.Error("failed to get unassigned chunk proving tasks count", "height", getTaskParameter.ProverHeight, "err", err)
+			log.Error("failed to get unassigned batch proving tasks count", "height", getTaskParameter.ProverHeight, "err", err)
 			return nil, ErrCoordinatorInternalFailure
 		}
 		// Assign external prover if unassigned task number exceeds threshold
@@ -83,14 +83,14 @@ func (bp *BatchProverTask) Assign(ctx *gin.Context, getTaskParameter *coordinato
 		var assignedOffset, unassignedOffset = 0, 0
 		tmpAssignedBatchTasks, getTaskError := bp.batchOrm.GetAssignedBatches(ctx.Copy(), maxActiveAttempts, maxTotalAttempts, 50)
 		if getTaskError != nil {
-			log.Error("failed to get assigned chunk proving tasks", "height", getTaskParameter.ProverHeight, "err", getTaskError)
+			log.Error("failed to get assigned batch proving tasks", "height", getTaskParameter.ProverHeight, "err", getTaskError)
 			return nil, ErrCoordinatorInternalFailure
 		}
 		// Why here need get again? In order to support a task can assign to multiple prover, need also assign `ProvingTaskAssigned`
 		// chunk to prover. But use `proving_status in (1, 2)` will not use the postgres index. So need split the sql.
 		tmpUnassignedBatchTask, getTaskError := bp.batchOrm.GetUnassignedBatches(ctx.Copy(), maxActiveAttempts, maxTotalAttempts, 50)
 		if getTaskError != nil {
-			log.Error("failed to get unassigned chunk proving tasks", "height", getTaskParameter.ProverHeight, "err", getTaskError)
+			log.Error("failed to get unassigned batch proving tasks", "height", getTaskParameter.ProverHeight, "err", getTaskError)
 			return nil, ErrCoordinatorInternalFailure
 		}
 		for {
