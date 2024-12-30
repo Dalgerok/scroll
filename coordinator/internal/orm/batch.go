@@ -100,6 +100,7 @@ func (o *Batch) GetUnassignedBatchCount(ctx context.Context, maxActiveAttempts, 
 	db = db.Where("proving_status = ?", int(types.ProvingTaskUnassigned))
 	db = db.Where("total_attempts < ?", maxTotalAttempts)
 	db = db.Where("active_attempts < ?", maxActiveAttempts)
+	db = db.Where("chunk_proofs_status = ?", int(types.ChunkProofsStatusReady))
 	db = db.Where("batch.deleted_at IS NULL")
 	if err := db.Count(&count).Error; err != nil {
 		return 0, fmt.Errorf("Batch.GetUnassignedBatchCount error: %w", err)
