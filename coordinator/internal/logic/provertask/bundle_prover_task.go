@@ -65,8 +65,8 @@ func (bp *BundleProverTask) Assign(ctx *gin.Context, getTaskParameter *coordinat
 	maxActiveAttempts := bp.cfg.ProverManager.ProversPerSession
 	maxTotalAttempts := bp.cfg.ProverManager.SessionAttempts
 	if strings.HasPrefix(taskCtx.ProverName, ExternalProverNamePrefix) {
-		unassignedBundleCount, err := bp.bundleOrm.GetUnassignedBundleCount(ctx.Copy(), maxActiveAttempts, maxTotalAttempts)
-		if err != nil {
+		unassignedBundleCount, getCountError := bp.bundleOrm.GetUnassignedBundleCount(ctx.Copy(), maxActiveAttempts, maxTotalAttempts)
+		if getCountError != nil {
 			log.Error("failed to get unassigned chunk proving tasks count", "height", getTaskParameter.ProverHeight, "err", err)
 			return nil, ErrCoordinatorInternalFailure
 		}
@@ -102,15 +102,15 @@ func (bp *BundleProverTask) Assign(ctx *gin.Context, getTaskParameter *coordinat
 				tmpBundleTask = tmpUnassignedBundleTask[unassignedOffset]
 				unassignedOffset++
 			}
- 
+
 			if tmpBundleTask == nil {
 				log.Debug("get empty bundle", "height", getTaskParameter.ProverHeight)
 				return nil, nil
 			}
 
 			// Don't dispatch the same failing job to the same prover
-			proverTask, err := bp.proverTaskOrm.GetTaskOfProver(ctx.Copy(), message.ProofTypeBatch, tmpBundleTask.Hash, taskCtx.PublicKey, taskCtx.ProverVersion)
-			if err != nil {
+			proverTask, getTaskError := bp.proverTaskOrm.GetTaskOfProver(ctx.Copy(), message.ProofTypeBatch, tmpBundleTask.Hash, taskCtx.PublicKey, taskCtx.ProverVersion)
+			if getTaskError != nil {
 				log.Error("failed to get prover task of prover", "proof_type", message.ProofTypeBatch.String(), "taskID", tmpBundleTask.Hash, "key", taskCtx.PublicKey, "Prover_version", taskCtx.ProverVersion, "error", err)
 				return nil, ErrCoordinatorInternalFailure
 			}

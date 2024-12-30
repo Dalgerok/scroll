@@ -63,8 +63,8 @@ func (cp *ChunkProverTask) Assign(ctx *gin.Context, getTaskParameter *coordinato
 	maxActiveAttempts := cp.cfg.ProverManager.ProversPerSession
 	maxTotalAttempts := cp.cfg.ProverManager.SessionAttempts
 	if strings.HasPrefix(taskCtx.ProverName, ExternalProverNamePrefix) {
-		unassignedChunkCount, err := cp.chunkOrm.GetUnassignedChunkCount(ctx.Copy(), maxActiveAttempts, maxTotalAttempts, getTaskParameter.ProverHeight)
-		if err != nil {
+		unassignedChunkCount, getCountError := cp.chunkOrm.GetUnassignedChunkCount(ctx.Copy(), maxActiveAttempts, maxTotalAttempts, getTaskParameter.ProverHeight)
+		if getCountError != nil {
 			log.Error("failed to get unassigned chunk proving tasks count", "height", getTaskParameter.ProverHeight, "err", err)
 			return nil, ErrCoordinatorInternalFailure
 		}
@@ -100,15 +100,15 @@ func (cp *ChunkProverTask) Assign(ctx *gin.Context, getTaskParameter *coordinato
 				tmpChunkTask = tmpUnassignedChunkTask[unassignedOffset]
 				unassignedOffset++
 			}
- 
+
 			if tmpChunkTask == nil {
 				log.Debug("get empty chunk", "height", getTaskParameter.ProverHeight)
 				return nil, nil
 			}
 
 			// Don't dispatch the same failing job to the same prover
-			proverTask, err := cp.proverTaskOrm.GetTaskOfProver(ctx.Copy(), message.ProofTypeChunk, tmpChunkTask.Hash, taskCtx.PublicKey, taskCtx.ProverVersion)
-			if err != nil {
+			proverTask, getTaskError := cp.proverTaskOrm.GetTaskOfProver(ctx.Copy(), message.ProofTypeChunk, tmpChunkTask.Hash, taskCtx.PublicKey, taskCtx.ProverVersion)
+			if getTaskError != nil {
 				log.Error("failed to get prover task of prover", "proof_type", message.ProofTypeChunk.String(), "taskID", tmpChunkTask.Hash, "key", taskCtx.PublicKey, "Prover_version", taskCtx.ProverVersion, "error", err)
 				return nil, ErrCoordinatorInternalFailure
 			}
