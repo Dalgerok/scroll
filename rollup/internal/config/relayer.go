@@ -29,6 +29,18 @@ type SenderConfig struct {
 	TxType string `json:"tx_type"`
 	// The maximum number of pending blob-carrying transactions
 	MaxPendingBlobTxs int64 `json:"max_pending_blob_txs"`
+
+	// Config for batch submission
+	BatchSubmission *BatchSubmission `json:"batch_submission"`
+}
+
+type BatchSubmission struct {
+	// The minimum number of batches to submit in a single transaction.
+	MinBatches int `json:"min_batches"`
+	// The maximum number of batches to submit in a single transaction.
+	MaxBatches int `json:"max_batches"`
+	// The time in seconds after which a batch is considered stale and should be submitted ignoring the min batch count.
+	TimeoutSec int64 `json:"timeout"`
 }
 
 // ChainMonitor this config is used to get batch status from chain_monitor API.
