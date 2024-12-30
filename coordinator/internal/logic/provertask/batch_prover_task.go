@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -63,29 +64,59 @@ func (bp *BatchProverTask) Assign(ctx *gin.Context, getTaskParameter *coordinato
 
 	maxActiveAttempts := bp.cfg.ProverManager.ProversPerSession
 	maxTotalAttempts := bp.cfg.ProverManager.SessionAttempts
+	if strings.HasPrefix(taskCtx.ProverName, ExternalProverNamePrefix) {
+		unassignedBatchCount, err := bp.batchOrm.GetUnassignedBatchCount(ctx.Copy(), maxActiveAttempts, maxTotalAttempts)
+		if err != nil {
+			log.Error("failed to get unassigned chunk proving tasks count", "height", getTaskParameter.ProverHeight, "err", err)
+			return nil, ErrCoordinatorInternalFailure
+		}
+		// Assign external prover if unassigned task number exceeds threshold
+		if unassignedBatchCount < bp.cfg.ProverManager.ExternalProverThreshold {
+			return nil, nil
+		}
+	}
+
 	var batchTask *orm.Batch
 	for i := 0; i < 5; i++ {
 		var getTaskError error
 		var tmpBatchTask *orm.Batch
-		tmpBatchTask, getTaskError = bp.batchOrm.GetAssignedBatch(ctx.Copy(), maxActiveAttempts, maxTotalAttempts)
+		var assignedOffset, unassignedOffset = 0, 0
+		tmpAssignedBatchTasks, getTaskError := bp.batchOrm.GetAssignedBatches(ctx.Copy(), maxActiveAttempts, maxTotalAttempts, 50)
 		if getTaskError != nil {
-			log.Error("failed to get assigned batch proving tasks", "height", getTaskParameter.ProverHeight, "err", getTaskError)
+			log.Error("failed to get assigned chunk proving tasks", "height", getTaskParameter.ProverHeight, "err", getTaskError)
 			return nil, ErrCoordinatorInternalFailure
 		}
-
 		// Why here need get again? In order to support a task can assign to multiple prover, need also assign `ProvingTaskAssigned`
-		// batch to prover. But use `proving_status in (1, 2)` will not use the postgres index. So need split the sql.
-		if tmpBatchTask == nil {
-			tmpBatchTask, getTaskError = bp.batchOrm.GetUnassignedBatch(ctx.Copy(), maxActiveAttempts, maxTotalAttempts)
-			if getTaskError != nil {
-				log.Error("failed to get unassigned batch proving tasks", "height", getTaskParameter.ProverHeight, "err", getTaskError)
+		// chunk to prover. But use `proving_status in (1, 2)` will not use the postgres index. So need split the sql.
+		tmpUnassignedBatchTask, getTaskError := bp.batchOrm.GetUnassignedBatches(ctx.Copy(), maxActiveAttempts, maxTotalAttempts, 50)
+		if getTaskError != nil {
+			log.Error("failed to get unassigned chunk proving tasks", "height", getTaskParameter.ProverHeight, "err", getTaskError)
+			return nil, ErrCoordinatorInternalFailure
+		}
+		for {
+			tmpBatchTask = nil
+			if assignedOffset < len(tmpAssignedBatchTasks) {
+				tmpBatchTask = tmpAssignedBatchTasks[assignedOffset]
+				assignedOffset++
+			} else if unassignedOffset < len(tmpUnassignedBatchTask) {
+				tmpBatchTask = tmpUnassignedBatchTask[unassignedOffset]
+				unassignedOffset++
+			}
+ 
+			if tmpBatchTask == nil {
+				log.Debug("get empty batch", "height", getTaskParameter.ProverHeight)
+				return nil, nil
+			}
+
+			// Don't dispatch the same failing job to the same prover
+			proverTask, err := bp.proverTaskOrm.GetTaskOfProver(ctx.Copy(), message.ProofTypeBatch, tmpBatchTask.Hash, taskCtx.PublicKey, taskCtx.ProverVersion)
+			if err != nil {
+				log.Error("failed to get prover task of prover", "proof_type", message.ProofTypeBatch.String(), "taskID", tmpBatchTask.Hash, "key", taskCtx.PublicKey, "Prover_version", taskCtx.ProverVersion, "error", err)
 				return nil, ErrCoordinatorInternalFailure
 			}
-		}
-
-		if tmpBatchTask == nil {
-			log.Debug("get empty batch", "height", getTaskParameter.ProverHeight)
-			return nil, nil
+			if proverTask == nil || types.ProverProveStatus(proverTask.ProvingStatus) != types.ProverProofInvalid {
+				break
+			}
 		}
 
 		rowsAffected, updateAttemptsErr := bp.batchOrm.UpdateBatchAttempts(ctx.Copy(), tmpBatchTask.Index, tmpBatchTask.ActiveAttempts, tmpBatchTask.TotalAttempts)

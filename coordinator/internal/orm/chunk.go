@@ -73,36 +73,46 @@ func (*Chunk) TableName() string {
 
 // GetUnassignedChunk retrieves unassigned chunk based on the specified limit.
 // The returned chunks are sorted in ascending order by their index.
-func (o *Chunk) GetUnassignedChunk(ctx context.Context, maxActiveAttempts, maxTotalAttempts uint8, height uint64) (*Chunk, error) {
-	var chunk Chunk
+func (o *Chunk) GetUnassignedChunk(ctx context.Context, maxActiveAttempts, maxTotalAttempts uint8, height, limit uint64) ([]*Chunk, error) {
+	var chunks []*Chunk
 	db := o.db.WithContext(ctx)
-	sql := fmt.Sprintf("SELECT * FROM chunk WHERE proving_status = %d AND total_attempts < %d AND active_attempts < %d AND end_block_number <= %d AND chunk.deleted_at IS NULL ORDER BY chunk.index LIMIT 1;",
-		int(types.ProvingTaskUnassigned), maxTotalAttempts, maxActiveAttempts, height)
-	err := db.Raw(sql).Scan(&chunk).Error
+	sql := fmt.Sprintf("SELECT * FROM chunk WHERE proving_status = %d AND total_attempts < %d AND active_attempts < %d AND end_block_number <= %d AND chunk.deleted_at IS NULL ORDER BY chunk.index LIMIT %d;",
+		int(types.ProvingTaskUnassigned), maxTotalAttempts, maxActiveAttempts, height, limit)
+	err := db.Raw(sql).Scan(&chunks).Error
 	if err != nil {
 		return nil, fmt.Errorf("Chunk.GetUnassignedChunk error: %w", err)
 	}
-	if chunk.Hash == "" {
-		return nil, nil
-	}
-	return &chunk, nil
+	return chunks, nil
 }
 
-// GetAssignedChunk retrieves assigned chunk based on the specified limit.
-// The returned chunks are sorted in ascending order by their index.
-func (o *Chunk) GetAssignedChunk(ctx context.Context, maxActiveAttempts, maxTotalAttempts uint8, height uint64) (*Chunk, error) {
-	var chunk Chunk
+// GetUnassignedChunkCount retrieves unassigned chunk count based on the specified limit.
+func (o *Chunk) GetUnassignedChunkCount(ctx context.Context, maxActiveAttempts, maxTotalAttempts uint8, height uint64) (int64, error) {
+	var count int64
 	db := o.db.WithContext(ctx)
-	sql := fmt.Sprintf("SELECT * FROM chunk WHERE proving_status = %d AND total_attempts < %d AND active_attempts < %d AND end_block_number <= %d AND chunk.deleted_at IS NULL ORDER BY chunk.index LIMIT 1;",
-		int(types.ProvingTaskAssigned), maxTotalAttempts, maxActiveAttempts, height)
-	err := db.Raw(sql).Scan(&chunk).Error
+	db = db.Model(&Chunk{})
+	db = db.Where("proving_status = ?", int(types.ProvingTaskUnassigned))
+	db = db.Where("total_attempts < ?", maxTotalAttempts)
+	db = db.Where("active_attempts < ?", maxActiveAttempts)
+	db = db.Where("end_block_number <= ?", height)
+	db = db.Where("chunk.deleted_at IS NULL")
+	if err := db.Count(&count).Error; err != nil {
+		return 0, fmt.Errorf("Chunk.GetUnassignedChunkCount error: %w", err)
+	}
+	return count, nil
+}
+
+// GetAssignedChunks retrieves assigned chunks based on the specified limit.
+// The returned chunks are sorted in ascending order by their index.
+func (o *Chunk) GetAssignedChunks(ctx context.Context, maxActiveAttempts, maxTotalAttempts uint8, height uint64, limit uint64) ([]*Chunk, error) {
+	var chunks []*Chunk
+	db := o.db.WithContext(ctx)
+	sql := fmt.Sprintf("SELECT * FROM chunk WHERE proving_status = %d AND total_attempts < %d AND active_attempts < %d AND end_block_number <= %d AND chunk.deleted_at IS NULL ORDER BY chunk.index LIMIT %d;",
+		int(types.ProvingTaskAssigned), maxTotalAttempts, maxActiveAttempts, height, limit)
+	err := db.Raw(sql).Scan(&chunks).Error
 	if err != nil {
-		return nil, fmt.Errorf("Chunk.GetAssignedChunk error: %w", err)
+		return nil, fmt.Errorf("Chunk.GetAssignedChunks error: %w", err)
 	}
-	if chunk.Hash == "" {
-		return nil, nil
-	}
-	return &chunk, nil
+	return chunks, nil
 }
 
 // GetChunksByBatchHash retrieves the chunks associated with a specific batch hash.
