@@ -6,7 +6,7 @@ use super::geth_client::GethClient;
 use crate::{
     config::{AssetsDirEnvConfig, Config},
     types::{ProverType, Task, TaskType},
-    utils::{get_task_types},
+    utils::get_task_types,
 };
 use anyhow::{bail, Result};
 use darwin::DarwinHandler;
@@ -34,7 +34,6 @@ type CircuitsHandlerBuilder = fn(
 ) -> Result<Box<dyn CircuitsHandler>>;
 
 pub struct CircuitsHandlerProvider<'a> {
-    prover_type: Vec<ProverType>,
     config: &'a Config,
     geth_client: Option<Rc<RefCell<GethClient>>>,
     circuits_handler_builder_map: HashMap<HardForkName, CircuitsHandlerBuilder>,
@@ -46,7 +45,6 @@ pub struct CircuitsHandlerProvider<'a> {
 
 impl<'a> CircuitsHandlerProvider<'a> {
     pub fn new(
-        prover_type: Vec<ProverType>,
         config: &'a Config,
         geth_client: Option<Rc<RefCell<GethClient>>>,
     ) -> Result<Self> {
@@ -100,7 +98,6 @@ impl<'a> CircuitsHandlerProvider<'a> {
         );
 
         let provider = CircuitsHandlerProvider {
-            prover_type,
             config,
             geth_client,
             circuits_handler_builder_map: m,

@@ -41,7 +41,7 @@ impl<'a> Prover<'a> {
             None
         };
 
-        let provider = CircuitsHandlerProvider::new(prover_types.clone(), config, geth_client.clone())
+        let provider = CircuitsHandlerProvider::new(config, geth_client.clone())
             .context("failed to create circuits handler provider")?;
 
         let vks = provider.init_vks(prover_types.clone(), config, geth_client.clone());
