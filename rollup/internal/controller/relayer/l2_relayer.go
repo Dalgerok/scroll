@@ -461,10 +461,13 @@ func (r *Layer2Relayer) ProcessPendingBatches() {
 
 	var calldata []byte
 	var blobs []*kzg4844.Blob
+	var maxBlockHeight uint64
+	var totalGasUsed uint64
+
 	codecVersion := encoding.CodecVersion(firstBatch.CodecVersion)
 	switch codecVersion {
 	case encoding.CodecV6:
-		calldata, blobs, err = r.constructCommitBatchPayloadCodecV6(batchesToSubmit)
+		calldata, blobs, maxBlockHeight, totalGasUsed, err = r.constructCommitBatchPayloadCodecV6(batchesToSubmit)
 		if err != nil {
 			log.Error("failed to construct commitBatchWithBlobProof payload for V6", "codecVersion", codecVersion, "start index", firstBatch.Index, "end index", lastBatch.Index, "err", err)
 			return
@@ -475,47 +478,46 @@ func (r *Layer2Relayer) ProcessPendingBatches() {
 	}
 
 	txHash, err := r.commitSender.SendTransaction(r.contextIDFromBatches(batchesToSubmit), &r.cfg.RollupContractAddress, calldata, blobs, 0)
-	//if err != nil {
-	//	if errors.Is(err, sender.ErrTooManyPendingBlobTxs) {
-	//		r.metrics.rollupL2RelayerProcessPendingBatchErrTooManyPendingBlobTxsTotal.Inc()
-	//		log.Debug(
-	//			"Skipped sending commitBatch tx to L1: too many pending blob txs",
-	//			"maxPending", r.cfg.SenderConfig.MaxPendingBlobTxs,
-	//			"err", err,
-	//		)
-	//		return
-	//	}
-	//	log.Error(
-	//		"Failed to send commitBatch tx to layer1",
-	//		"index", dbBatch.Index,
-	//		"hash", dbBatch.Hash,
-	//		"RollupContractAddress", r.cfg.RollupContractAddress,
-	//		"err", err,
-	//		"calldata", common.Bytes2Hex(calldata),
-	//	)
-	//	return
-	//}
-	//
-	//err = r.batchOrm.UpdateCommitTxHashAndRollupStatus(r.ctx, dbBatch.Hash, txHash.String(), types.RollupCommitting)
-	//if err != nil {
-	//	log.Error("UpdateCommitTxHashAndRollupStatus failed", "hash", dbBatch.Hash, "index", dbBatch.Index, "err", err)
-	//	return
-	//}
-	//
-	//var maxBlockHeight uint64
-	//var totalGasUsed uint64
-	//for _, dbChunk := range dbChunks {
-	//	if dbChunk.EndBlockNumber > maxBlockHeight {
-	//		maxBlockHeight = dbChunk.EndBlockNumber
-	//	}
-	//	totalGasUsed += dbChunk.TotalL2TxGas
-	//}
-	//r.metrics.rollupL2RelayerCommitBlockHeight.Set(float64(maxBlockHeight))
-	//r.metrics.rollupL2RelayerCommitThroughput.Add(float64(totalGasUsed))
-	//
-	//r.metrics.rollupL2RelayerProcessPendingBatchSuccessTotal.Inc()
-	//log.Info("Sent the commitBatch tx to layer1", "batch index", dbBatch.Index, "batch hash", dbBatch.Hash, "tx hash", txHash.String())
+	if err != nil {
+		if errors.Is(err, sender.ErrTooManyPendingBlobTxs) {
+			r.metrics.rollupL2RelayerProcessPendingBatchErrTooManyPendingBlobTxsTotal.Inc()
+			log.Debug(
+				"Skipped sending commitBatch tx to L1: too many pending blob txs",
+				"maxPending", r.cfg.SenderConfig.MaxPendingBlobTxs,
+				"err", err,
+			)
+			return
+		}
+		log.Error(
+			"Failed to send commitBatch tx to layer1",
+			"start index", firstBatch.Index,
+			"start hash", firstBatch.Hash,
+			"end index", lastBatch.Index,
+			"end hash", lastBatch.Hash,
+			"RollupContractAddress", r.cfg.RollupContractAddress,
+			"err", err,
+			"calldata", common.Bytes2Hex(calldata),
+		)
+		return
+	}
 
+	if err = r.db.Transaction(func(dbTX *gorm.DB) error {
+		for _, dbBatch := range batchesToSubmit {
+			if err = r.batchOrm.UpdateCommitTxHashAndRollupStatus(r.ctx, dbBatch.Batch.Hash, txHash.String(), types.RollupCommitting, dbTX); err != nil {
+				return fmt.Errorf("UpdateCommitTxHashAndRollupStatus failed for batch %d: %s, err %v", dbBatch.Batch.Index, dbBatch.Batch.Hash, err)
+			}
+		}
+
+		return nil
+	}); err != nil {
+		log.Error("failed to update status for batches to RollupCommitting", "err", err)
+	}
+
+	r.metrics.rollupL2RelayerCommitBlockHeight.Set(float64(maxBlockHeight))
+	r.metrics.rollupL2RelayerCommitThroughput.Add(float64(totalGasUsed))
+	r.metrics.rollupL2RelayerProcessPendingBatchSuccessTotal.Add(float64(len(batchesToSubmit)))
+
+	log.Info("Sent the commitBatches tx to layer1", "batches count", len(batchesToSubmit), "start index", firstBatch.Index, "start hash", firstBatch.Hash, "end index", lastBatch.Index, "end hash", lastBatch.Hash, "tx hash", txHash.String())
 }
 
 func (r *Layer2Relayer) contextIDFromBatches(batches []*dbBatchWithChunksAndParent) string {
@@ -1041,7 +1043,9 @@ func (r *Layer2Relayer) constructCommitBatchPayloadCodecV4(dbBatch *orm.Batch, d
 	return calldata, daBatch.Blob(), nil
 }
 
-func (r *Layer2Relayer) constructCommitBatchPayloadCodecV6(batchesToSubmit []*dbBatchWithChunksAndParent) ([]byte, []*kzg4844.Blob, error) {
+func (r *Layer2Relayer) constructCommitBatchPayloadCodecV6(batchesToSubmit []*dbBatchWithChunksAndParent) ([]byte, []*kzg4844.Blob, uint64, uint64, error) {
+	var maxBlockHeight uint64
+	var totalGasUsed uint64
 	blobs := make([]*kzg4844.Blob, len(batchesToSubmit))
 
 	version := encoding.CodecVersion(batchesToSubmit[0].Batch.CodecVersion)
@@ -1051,7 +1055,7 @@ func (r *Layer2Relayer) constructCommitBatchPayloadCodecV6(batchesToSubmit []*db
 		// double check that all batches have the same version
 		batchVersion := encoding.CodecVersion(b.Batch.CodecVersion)
 		if batchVersion != version {
-			return nil, nil, fmt.Errorf("codec version mismatch, expected: %d, got: %d for batches %d and %d", version, batchVersion, batchesToSubmit[0].Batch.Index, b.Batch.Index)
+			return nil, nil, 0, 0, fmt.Errorf("codec version mismatch, expected: %d, got: %d for batches %d and %d", version, batchVersion, batchesToSubmit[0].Batch.Index, b.Batch.Index)
 		}
 
 		if firstParentBatch == nil {
@@ -1062,9 +1066,14 @@ func (r *Layer2Relayer) constructCommitBatchPayloadCodecV6(batchesToSubmit []*db
 		for i, c := range b.Chunks {
 			blocks, err := r.l2BlockOrm.GetL2BlocksInRange(r.ctx, c.StartBlockNumber, c.EndBlockNumber)
 			if err != nil {
-				return nil, nil, fmt.Errorf("failed to get blocks in range for batch %d: %w", b.Batch.Index, err)
+				return nil, nil, 0, 0, fmt.Errorf("failed to get blocks in range for batch %d: %w", b.Batch.Index, err)
 			}
 			chunks[i] = &encoding.Chunk{Blocks: blocks}
+
+			if c.EndBlockNumber > maxBlockHeight {
+				maxBlockHeight = c.EndBlockNumber
+			}
+			totalGasUsed += c.TotalL2TxGas
 		}
 
 		encodingBatch := &encoding.Batch{
@@ -1076,27 +1085,27 @@ func (r *Layer2Relayer) constructCommitBatchPayloadCodecV6(batchesToSubmit []*db
 
 		codec, err := encoding.CodecFromVersion(version)
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to get codec from version %d, err: %w", b.Batch.CodecVersion, err)
+			return nil, nil, 0, 0, fmt.Errorf("failed to get codec from version %d, err: %w", b.Batch.CodecVersion, err)
 		}
 
 		daBatch, err := codec.NewDABatch(encodingBatch)
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to create DA batch: %w", err)
+			return nil, nil, 0, 0, fmt.Errorf("failed to create DA batch: %w", err)
 		}
 
 		blobs = append(blobs, daBatch.Blob())
 	}
 
 	if firstParentBatch == nil {
-		return nil, nil, fmt.Errorf("firstParentBatch is nil")
+		return nil, nil, 0, 0, fmt.Errorf("firstParentBatch is nil")
 	}
 
 	// TODO: this needs to be updated once the contract interface is finalized
 	calldata, err := r.l1RollupABI.Pack("commitBatches", version, firstParentBatch.BatchHeader)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to pack commitBatchWithBlobProof: %w", err)
+		return nil, nil, 0, 0, fmt.Errorf("failed to pack commitBatchWithBlobProof: %w", err)
 	}
-	return calldata, blobs, nil
+	return calldata, blobs, maxBlockHeight, totalGasUsed, nil
 }
 
 func (r *Layer2Relayer) constructFinalizeBundlePayloadCodecV4(dbBatch *orm.Batch, aggProof *message.BundleProof) ([]byte, error) {
