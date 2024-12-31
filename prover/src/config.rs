@@ -30,7 +30,7 @@ pub struct Config {
     pub keystore_path: String,
     pub keystore_password: String,
     pub db_path: String,
-    pub prover_type: ProverType,
+    pub prover_types: Vec<ProverType>,
     pub low_version_circuit: CircuitConfig,
     pub high_version_circuit: CircuitConfig,
     pub coordinator: CoordinatorConfig,

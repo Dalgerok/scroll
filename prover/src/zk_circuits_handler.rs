@@ -6,7 +6,7 @@ use super::geth_client::GethClient;
 use crate::{
     config::{AssetsDirEnvConfig, Config},
     types::{ProverType, Task, TaskType},
-    utils::get_task_types,
+    utils::{get_task_types},
 };
 use anyhow::{bail, Result};
 use darwin::DarwinHandler;
@@ -34,18 +34,19 @@ type CircuitsHandlerBuilder = fn(
 ) -> Result<Box<dyn CircuitsHandler>>;
 
 pub struct CircuitsHandlerProvider<'a> {
-    prover_type: ProverType,
+    prover_type: Vec<ProverType>,
     config: &'a Config,
     geth_client: Option<Rc<RefCell<GethClient>>>,
     circuits_handler_builder_map: HashMap<HardForkName, CircuitsHandlerBuilder>,
 
     current_fork_name: Option<HardForkName>,
+    current_prover_type: Option<ProverType>,
     current_circuit: Option<Rc<Box<dyn CircuitsHandler>>>,
 }
 
 impl<'a> CircuitsHandlerProvider<'a> {
     pub fn new(
-        prover_type: ProverType,
+        prover_type: Vec<ProverType>,
         config: &'a Config,
         geth_client: Option<Rc<RefCell<GethClient>>>,
     ) -> Result<Self> {
@@ -104,6 +105,7 @@ impl<'a> CircuitsHandlerProvider<'a> {
             geth_client,
             circuits_handler_builder_map: m,
             current_fork_name: None,
+            current_prover_type: None,
             current_circuit: None,
         };
 
@@ -113,6 +115,7 @@ impl<'a> CircuitsHandlerProvider<'a> {
     pub fn get_circuits_handler(
         &mut self,
         hard_fork_name: &String,
+        prover_type: ProverType
     ) -> Result<Rc<Box<dyn CircuitsHandler>>> {
         match &self.current_fork_name {
             Some(fork_name) if fork_name == hard_fork_name => {
@@ -129,9 +132,10 @@ impl<'a> CircuitsHandlerProvider<'a> {
                 );
                 if let Some(builder) = self.circuits_handler_builder_map.get(hard_fork_name) {
                     log::info!("building circuits handler for {hard_fork_name}");
-                    let handler = builder(self.prover_type, self.config, self.geth_client.clone())
+                    let handler = builder(prover_type, self.config, self.geth_client.clone())
                         .expect("failed to build circuits handler");
                     self.current_fork_name = Some(hard_fork_name.clone());
+                    self.current_prover_type = Some(prover_type.clone());
                     let rc_handler = Rc::new(handler);
                     self.current_circuit = Some(rc_handler.clone());
                     Ok(rc_handler)
@@ -144,31 +148,29 @@ impl<'a> CircuitsHandlerProvider<'a> {
 
     pub fn init_vks(
         &self,
-        prover_type: ProverType,
+        prover_types: Vec<ProverType>,
         config: &'a Config,
         geth_client: Option<Rc<RefCell<GethClient>>>,
     ) -> Vec<String> {
-        self.circuits_handler_builder_map
-            .iter()
-            .flat_map(|(hard_fork_name, build)| {
-                let handler = build(prover_type, config, geth_client.clone())
+        let mut vks = Vec::new();
+        for (hard_fork_name, build) in self.circuits_handler_builder_map.iter() {
+            for prover_type in prover_types.iter() {
+                let handler = build(*prover_type, config, geth_client.clone())
                     .expect("failed to build circuits handler");
-
-                get_task_types(prover_type)
-                    .into_iter()
-                    .map(|task_type| {
-                        let vk = handler
-                            .get_vk(task_type)
-                            .map_or("".to_string(), utils::encode_vk);
-                        log::info!(
-                            "vk for {hard_fork_name}, is {vk}, task_type: {:?}",
-                            task_type
-                        );
-                        vk
-                    })
-                    .filter(|vk| !vk.is_empty())
-                    .collect::<Vec<String>>()
-            })
-            .collect::<Vec<String>>()
+                for task_type in get_task_types(*prover_type) {
+                    let vk = handler 
+                        .get_vk(task_type)
+                        .map_or("".to_string(), utils::encode_vk);
+                    log::info!(
+                        "vk for {hard_fork_name}, is {vk}, task_type: {:?}",
+                        task_type
+                    );
+                    if !vk.is_empty() {
+                        vks.push(vk);
+                    }
+                }
+            }
+        }
+        vks
     }
 }

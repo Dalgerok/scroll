@@ -24,9 +24,31 @@ pub fn log_init(log_file: Option<String>) {
     });
 }
 
+// pub fn get_task_types(prover_types: Vec<ProverType>) -> Vec<TaskType> {
+//     prover_types.into_iter().fold(Vec::new(), |mut acc, prover_type| {
+//         match prover_type {
+//             ProverType::Chunk => acc.push(TaskType::Chunk),
+//             ProverType::Batch => {
+//                 acc.push(TaskType::Batch);
+//                 acc.push(TaskType::Bundle);
+//             }
+//         }
+//         acc
+//     })
+// }
+
 pub fn get_task_types(prover_type: ProverType) -> Vec<TaskType> {
     match prover_type {
         ProverType::Chunk => vec![TaskType::Chunk],
         ProverType::Batch => vec![TaskType::Batch, TaskType::Bundle],
     }
+}
+
+pub fn get_prover_type(task_type: TaskType) -> Option<ProverType> {
+        match task_type {
+            TaskType::Undefined => None,
+            TaskType::Chunk => Some(ProverType::Chunk),
+            TaskType::Batch => Some(ProverType::Batch),
+            TaskType::Bundle => Some(ProverType::Batch),
+        }
 }

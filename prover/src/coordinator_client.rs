@@ -73,7 +73,7 @@ impl<'a> CoordinatorClient<'a> {
             challenge: token.clone(),
             prover_name: self.config.prover_name.clone(),
             prover_version: crate::version::get_version(),
-            prover_types: vec![self.config.prover_type],
+            prover_types: self.config.prover_types.clone(),
             vks: self.vks.clone(),
         };
 

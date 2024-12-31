@@ -66,7 +66,7 @@ fn start() -> Result<()> {
     log::info!(
         "prover start successfully. name: {}, type: {:?}, publickey: {}, version: {}",
         config.prover_name,
-        config.prover_type,
+        config.prover_types,
         prover.get_public_key(),
         version::get_version(),
     );

@@ -8,8 +8,8 @@ use crate::{
     coordinator_client::{listener::Listener, types::*, CoordinatorClient},
     geth_client::GethClient,
     key_signer::KeySigner,
-    types::{ProofFailureType, ProofStatus, ProverType},
-    utils::get_task_types,
+    types::{ProofFailureType, ProofStatus, ProverType, TaskType},
+    utils::{get_task_types, get_prover_type},
     zk_circuits_handler::{CircuitsHandler, CircuitsHandlerProvider},
 };
 
@@ -25,11 +25,11 @@ pub struct Prover<'a> {
 
 impl<'a> Prover<'a> {
     pub fn new(config: &'a Config, coordinator_listener: Box<dyn Listener>) -> Result<Self> {
-        let prover_type = config.prover_type;
+        let prover_types = config.prover_types.clone();
         let keystore_path = &config.keystore_path;
         let keystore_password = &config.keystore_password;
 
-        let geth_client = if config.prover_type == ProverType::Chunk {
+        let geth_client = if config.prover_types.clone().iter().any(|element| *element == ProverType::Chunk) {
             Some(Rc::new(RefCell::new(
                 GethClient::new(
                     &config.prover_name,
@@ -41,10 +41,10 @@ impl<'a> Prover<'a> {
             None
         };
 
-        let provider = CircuitsHandlerProvider::new(prover_type, config, geth_client.clone())
+        let provider = CircuitsHandlerProvider::new(prover_types.clone(), config, geth_client.clone())
             .context("failed to create circuits handler provider")?;
 
-        let vks = provider.init_vks(prover_type, config, geth_client.clone());
+        let vks = provider.init_vks(prover_types.clone(), config, geth_client.clone());
 
         let key_signer = Rc::new(KeySigner::new(keystore_path, keystore_password)?);
         let coordinator_client =
@@ -68,12 +68,18 @@ impl<'a> Prover<'a> {
 
     pub fn fetch_task(&self) -> Result<Task> {
         log::info!("[prover] start to fetch_task");
+
+        let task_types: Vec<TaskType> = self.config.prover_types.clone().into_iter().fold(Vec::new(), |mut acc, prover_type| {
+            acc.extend(get_task_types(prover_type));
+            acc
+        });
+
         let mut req = GetTaskRequest {
-            task_types: get_task_types(self.config.prover_type),
+            task_types: task_types,
             prover_height: None,
         };
 
-        if self.config.prover_type == ProverType::Chunk {
+        if self.config.prover_types.iter().any(|element| *element == ProverType::Chunk) {
             let latest_block_number = self.get_latest_block_number_value()?;
             if let Some(v) = latest_block_number {
                 if v.as_u64() == 0 {
@@ -96,11 +102,17 @@ impl<'a> Prover<'a> {
     }
 
     pub fn prove_task(&self, task: &Task) -> Result<ProofDetail> {
+        let prover_type = match get_prover_type(task.task_type) {
+            Some(pt) => Ok(pt),
+            None => {
+                bail!("unsupported prover_type.")
+            }
+        }?;
         log::info!("[prover] start to prove_task, task id: {}", task.id);
         let handler: Rc<Box<dyn CircuitsHandler>> = self
             .circuits_handler_provider
             .borrow_mut()
-            .get_circuits_handler(&task.hard_fork_name)
+            .get_circuits_handler(&task.hard_fork_name, prover_type)
             .context("failed to get circuit handler")?;
         self.do_prove(task, handler)
     }
