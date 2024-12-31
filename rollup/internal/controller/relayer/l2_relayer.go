@@ -459,10 +459,12 @@ func (r *Layer2Relayer) ProcessPendingBatches() {
 	firstBatch := batchesToSubmit[0].Batch
 	lastBatch := batchesToSubmit[len(batchesToSubmit)-1].Batch
 
+	var calldata []byte
+	var blobs []*kzg4844.Blob
 	codecVersion := encoding.CodecVersion(firstBatch.CodecVersion)
 	switch codecVersion {
 	case encoding.CodecV6:
-		calldata, blob, err := r.constructCommitBatchPayloadCodecV6(batchesToSubmit)
+		calldata, blobs, err = r.constructCommitBatchPayloadCodecV6(batchesToSubmit)
 		if err != nil {
 			log.Error("failed to construct commitBatchWithBlobProof payload for V6", "codecVersion", codecVersion, "start index", firstBatch.Index, "end index", lastBatch.Index, "err", err)
 			return
@@ -472,7 +474,7 @@ func (r *Layer2Relayer) ProcessPendingBatches() {
 		return
 	}
 
-	//txHash, err := r.commitSender.SendTransaction(dbBatch.Hash, &r.cfg.RollupContractAddress, calldata, blob, 0)
+	txHash, err := r.commitSender.SendTransaction(r.contextIDFromBatches(batchesToSubmit), &r.cfg.RollupContractAddress, calldata, blobs, 0)
 	//if err != nil {
 	//	if errors.Is(err, sender.ErrTooManyPendingBlobTxs) {
 	//		r.metrics.rollupL2RelayerProcessPendingBatchErrTooManyPendingBlobTxsTotal.Inc()
@@ -514,6 +516,24 @@ func (r *Layer2Relayer) ProcessPendingBatches() {
 	//r.metrics.rollupL2RelayerProcessPendingBatchSuccessTotal.Inc()
 	//log.Info("Sent the commitBatch tx to layer1", "batch index", dbBatch.Index, "batch hash", dbBatch.Hash, "tx hash", txHash.String())
 
+}
+
+func (r *Layer2Relayer) contextIDFromBatches(batches []*dbBatchWithChunksAndParent) string {
+	contextIDs := []string{"v6"}
+
+	for _, batch := range batches {
+		contextIDs = append(contextIDs, batch.Batch.Hash)
+	}
+
+	return strings.Join(contextIDs, "-")
+}
+
+func (r *Layer2Relayer) batchHashesFromContextID(contextID string) []string {
+	if strings.HasPrefix(contextID, "v6-") {
+		return strings.Split(contextID, "-")[1:]
+	}
+
+	return []string{contextID}
 }
 
 type dbBatchWithChunksAndParent struct {
@@ -589,7 +609,7 @@ func (r *Layer2Relayer) processPendingBatchesV4(dbBatches []*orm.Batch) {
 			log.Warn("Batch commit previously failed, using eth_estimateGas for the re-submission", "hash", dbBatch.Hash)
 		}
 
-		txHash, err := r.commitSender.SendTransaction(dbBatch.Hash, &r.cfg.RollupContractAddress, calldata, blob, fallbackGasLimit)
+		txHash, err := r.commitSender.SendTransaction(dbBatch.Hash, &r.cfg.RollupContractAddress, calldata, []*kzg4844.Blob{blob}, fallbackGasLimit)
 		if err != nil {
 			if errors.Is(err, sender.ErrTooManyPendingBlobTxs) {
 				r.metrics.rollupL2RelayerProcessPendingBatchErrTooManyPendingBlobTxsTotal.Inc()
@@ -875,9 +895,17 @@ func (r *Layer2Relayer) handleConfirmation(cfm *sender.Confirmation) {
 			log.Warn("CommitBatchTxType transaction confirmed but failed in layer1", "confirmation", cfm)
 		}
 
-		err := r.batchOrm.UpdateCommitTxHashAndRollupStatus(r.ctx, cfm.ContextID, cfm.TxHash.String(), status)
-		if err != nil {
-			log.Warn("UpdateCommitTxHashAndRollupStatus failed", "confirmation", cfm, "err", err)
+		batchHashes := r.batchHashesFromContextID(cfm.ContextID)
+		if err := r.db.Transaction(func(dbTX *gorm.DB) error {
+			for _, batchHash := range batchHashes {
+				if err := r.batchOrm.UpdateCommitTxHashAndRollupStatus(r.ctx, batchHash, cfm.TxHash.String(), status, dbTX); err != nil {
+					return fmt.Errorf("UpdateCommitTxHashAndRollupStatus failed, batchHash: %s, txHash: %s, status: %s, err: %w", batchHash, cfm.TxHash.String(), status, err)
+				}
+			}
+
+			return nil
+		}); err != nil {
+			log.Warn("failed to update confirmation status for batches", "confirmation", cfm, "err", err)
 		}
 	case types.SenderTypeFinalizeBatch:
 		if strings.HasPrefix(cfm.ContextID, "finalizeBundle-") {

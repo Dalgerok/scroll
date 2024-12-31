@@ -395,7 +395,7 @@ func (o *Batch) UpdateRollupStatus(ctx context.Context, hash string, status type
 }
 
 // UpdateCommitTxHashAndRollupStatus updates the commit transaction hash and rollup status for a batch.
-func (o *Batch) UpdateCommitTxHashAndRollupStatus(ctx context.Context, hash string, commitTxHash string, status types.RollupStatus) error {
+func (o *Batch) UpdateCommitTxHashAndRollupStatus(ctx context.Context, hash string, commitTxHash string, status types.RollupStatus, dbTX ...*gorm.DB) error {
 	updateFields := make(map[string]interface{})
 	updateFields["commit_tx_hash"] = commitTxHash
 	updateFields["rollup_status"] = int(status)
@@ -403,7 +403,11 @@ func (o *Batch) UpdateCommitTxHashAndRollupStatus(ctx context.Context, hash stri
 		updateFields["committed_at"] = utils.NowUTC()
 	}
 
-	db := o.db.WithContext(ctx)
+	db := o.db
+	if len(dbTX) > 0 && dbTX[0] != nil {
+		db = dbTX[0]
+	}
+	db = db.WithContext(ctx)
 	db = db.Model(&Batch{})
 	db = db.Where("hash", hash)
 
